@@ -23,6 +23,8 @@ import io.supertokens.inmemorydb.ConnectionWithLocks;
 import io.supertokens.inmemorydb.Start;
 import io.supertokens.inmemorydb.config.Config;
 import io.supertokens.pluginInterface.KeyValueInfo;
+import io.supertokens.pluginInterface.RowMapper;
+import io.supertokens.pluginInterface.exceptions.StorageQueryException;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -91,6 +93,22 @@ public class GeneralQueries {
             }
         }
 
+        if (!doesTableExists(start, Config.getConfig(start).getEmailVerificationTokensTable())) {
+            ProcessState.getInstance(main).addState(ProcessState.PROCESS_STATE.CREATING_NEW_TABLE, null);
+            try (Connection con = ConnectionPool.getConnection(start);
+                 PreparedStatement pst = con
+                         .prepareStatement(EmailPasswordQueries.getQueryToCreateEmailVerificationTokensTable(start))) {
+                pst.executeUpdate();
+            }
+            // index
+            try (Connection con = ConnectionPool.getConnection(start);
+                 PreparedStatement pstIndex = con
+                         .prepareStatement(
+                                 EmailPasswordQueries.getQueryToCreateEmailVerificationTokenExpiryIndex(start))) {
+                pstIndex.executeUpdate();
+            }
+        }
+
     }
 
     public static void setKeyValue_Transaction(Start start, Connection con, String key, KeyValueInfo info)
@@ -118,7 +136,7 @@ public class GeneralQueries {
     }
 
 
-    public static KeyValueInfo getKeyValue(Start start, String key) throws SQLException {
+    public static KeyValueInfo getKeyValue(Start start, String key) throws SQLException, StorageQueryException {
         String QUERY = "SELECT value, created_at_time FROM "
                 + Config.getConfig(start).getKeyValueTable() + " WHERE name = ?";
 
@@ -127,13 +145,14 @@ public class GeneralQueries {
             pst.setString(1, key);
             ResultSet result = pst.executeQuery();
             if (result.next()) {
-                return new KeyValueInfo(result.getString("value"), result.getLong("created_at_time"));
+                return KeyValueInfoRowMapper.getInstance().mapOrThrow(result);
             }
         }
         return null;
     }
 
-    public static KeyValueInfo getKeyValue_Transaction(Start start, Connection con, String key) throws SQLException {
+    public static KeyValueInfo getKeyValue_Transaction(Start start, Connection con, String key)
+            throws SQLException, StorageQueryException {
 
         ((ConnectionWithLocks) con).lock(key);
 
@@ -144,10 +163,25 @@ public class GeneralQueries {
             pst.setString(1, key);
             ResultSet result = pst.executeQuery();
             if (result.next()) {
-                return new KeyValueInfo(result.getString("value"), result.getLong("created_at_time"));
+                return KeyValueInfoRowMapper.getInstance().mapOrThrow(result);
             }
         }
         return null;
     }
 
+    private static class KeyValueInfoRowMapper implements RowMapper<KeyValueInfo, ResultSet> {
+        private static final KeyValueInfoRowMapper INSTANCE = new KeyValueInfoRowMapper();
+
+        private KeyValueInfoRowMapper() {
+        }
+
+        private static KeyValueInfoRowMapper getInstance() {
+            return INSTANCE;
+        }
+
+        @Override
+        public KeyValueInfo map(ResultSet result) throws Exception {
+            return new KeyValueInfo(result.getString("value"), result.getLong("created_at_time"));
+        }
+    }
 }
